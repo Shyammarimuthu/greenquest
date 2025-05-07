@@ -182,6 +182,7 @@ def log_activity(
     cpu_usage_percentage,
     memory_usage_percentage,
     temperature,
+    created_at,
     created_by
 ):
     payload = {
