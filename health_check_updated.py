@@ -60,7 +60,7 @@ def send_health_check(component_name, status, value=None, remarks=""):
         print(f"✅ Sent [{component_name}] | Status: {response.status_code} | Remarks: {remarks}")
 
         if status == "1":
-            return  # Only log activity if all passed
+            return 
         else:
             error_occurred = True
             error_messages.append(f"{component_name}: {remarks}")
