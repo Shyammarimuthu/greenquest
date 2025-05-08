@@ -10,7 +10,6 @@ import adafruit_ads1x15.ads1115 as ADS
 from adafruit_ads1x15.analog_in import AnalogIn
 import requests
 
-
 ROVER_ID = "R_001"
 RPI_NO = "Rpi_001"
 SAVE_DIR = "/home/sabbi/health_check/check_test_folder"
@@ -20,18 +19,20 @@ LOCATION_Z = ""
 POST_URL = "http://localhost:5000/logHealthCheckRPI"
 ACTIVITY_URL = "http://localhost:5000/logActivity"
 ERROR_URL = "http://localhost:5000/logError"
-IMAGE_SIZE_THRESHOLD_KB = 50  
+IMAGE_SIZE_THRESHOLD_KB = 50
 
 SENSORS = [
     (23, 24, "us1"),
     (25, 27, "us2"),
     (12, 13, "us3"),
     (21, 26, "us4"),
-    (22, 17, "us5"),
-    (5, 6, "us6"),
 ]
 
 DIV_RATIO = 11.14
+
+# Global error flag
+error_occurred = False
+error_messages = []
 
 GPIO.setmode(GPIO.BCM)
 for trig, echo, _ in SENSORS:
@@ -39,6 +40,7 @@ for trig, echo, _ in SENSORS:
     GPIO.setup(echo, GPIO.IN)
 
 def send_health_check(component_name, status, value=None, remarks=""):
+    global error_occurred, error_messages
     now = datetime.now().isoformat()
     data = {
         "rover_id": ROVER_ID,
@@ -56,43 +58,16 @@ def send_health_check(component_name, status, value=None, remarks=""):
     try:
         response = requests.post(POST_URL, headers={'Content-Type': 'application/json'}, json=data)
         print(f"✅ Sent [{component_name}] | Status: {response.status_code} | Remarks: {remarks}")
-        
-        
-         if response.status_code == 200:
-            print(f"✅ Sent [{component_name}] | Status: {response.status_code} | Remarks: {remarks}")
-            log_activity(
-                activity_id="act-1001",
-                rover_id=ROVER_ID,
-                activity_type="Health Check",
-                description="Health check passed successfully",
-                location_x=LOCATION_X ,
-                location_y=LOCATION_Y ,
-                location_z=LOCATION_Z ,
-                battery_percentage=0.0,
-                cpu_usage_percentage=0.0,
-                memory_usage_percentage=0.0,
-                temperature=0.0,
-                created_by=101
-            )
-        
+
+        if status == "1":
+            return 
         else:
-            log_error(
-                activity_id="act-5647",
-                activity_type="Sensor Malfunction",
-                created_by=101,
-                error_code="E203",
-                rover_id=ROVER_ID,
-                error_message="Health check failure",
-                location_x=LOCATION_X ,
-                location_y=LOCATION_Y ﻿,
-                location_z=LOCATION_Z ,
-                battery_percentage=0.0,
-                cpu_usage_percentage=0.0,
-                memory_usage_percentage=0.0,
-                temperature=0.0
-            )
+            error_occurred = True
+            error_messages.append(f"{component_name}: {remarks}")
 
     except requests.exceptions.RequestException as e:
+        error_occurred = True
+        error_messages.append(f"{component_name}: Request failed - {e}")
         print(f"❌ Failed to send [{component_name}] | Error: {e}")
 
 def create_folder(folder_name):
@@ -111,12 +86,11 @@ def capture_camera(device_path, component_name):
                 filename = os.path.join(SAVE_DIR, f"{component_name}_{now}.jpg")
                 cv2.imwrite(filename, frame)
 
-                file_size_kb = os.path.getsize(filename) / 1024  
-
+                file_size_kb = os.path.getsize(filename) / 1024
                 if file_size_kb > IMAGE_SIZE_THRESHOLD_KB:
-                    send_health_check(component_name, "1", filename, "Camera is detected, captured image is greater than 50KB")
+                    send_health_check(component_name, "1", filename, "Camera is detected, image > 50KB")
                 else:
-                    send_health_check(component_name, "2", filename, "Camera is detected, captured image is less than 50KB")
+                    send_health_check(component_name, "2", filename, "Camera is detected, image < 50KB")
             else:
                 send_health_check(component_name, "0", "", "Camera is not detected")
         else:
@@ -125,8 +99,13 @@ def capture_camera(device_path, component_name):
         send_health_check(component_name, "ERROR", "", f"Camera error: {e}")
 
 def monitor_cameras():
-    threading.Thread(target=capture_camera, args=("/dev/front_cam", "cam_f")).start()
-    threading.Thread(target=capture_camera, args=("/dev/back_cam", "cam_b")).start()
+    threads = []
+    threads.append(threading.Thread(target=capture_camera, args=("/dev/front_cam", "cam_f")))
+    threads.append(threading.Thread(target=capture_camera, args=("/dev/back_cam", "cam_b")))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 def monitor_ultrasonic(trig, echo, name):
     try:
@@ -156,7 +135,7 @@ def monitor_ultrasonic(trig, echo, name):
         else:
             send_health_check(name, "1", "INF", f"{name} out of range")
     except Exception as e:
-        send_health_check(name, "0", "", f"{name} not detected or error: {e}")
+        send_health_check(name, "0", "", f"{name} error: {e}")
 
 def monitor_voltage_sensor(name="voltage_sensor"):
     try:
@@ -168,37 +147,23 @@ def monitor_voltage_sensor(name="voltage_sensor"):
         actual = round(measured * DIV_RATIO, 2)
         send_health_check(name, "1", actual, "Voltage Read")
     except Exception as e:
-        send_health_check(name, "0", "", str(e))
+        send_health_check(name, "0", "", f"{name} error: {e}")
 
-def log_activity(
-    activity_id,
-    rover_id,
-    activity_type,
-    description,
-    location_x,
-    location_y,
-    location_z,
-    battery_percentage,
-    cpu_usage_percentage,
-    memory_usage_percentage,
-    temperature,
-    created_at,
-    created_by
-):
+def log_activity():
     payload = {
-        "activity_id": activity_id,
-        "rover_id": rover_id,
-        "activity_type": activity_type,
-        "description": description,
-        "location_x": location_x,
-        "location_y": location_y,
-        "location_z": location_z,
-        "battery_percentage": battery_percentage,
-        "cpu_usage_percentage": cpu_usage_percentage,
-        "memory_usage_percentage": memory_usage_percentage,
-        "temperature": temperature,
+        "activity_id": "act-1001",
+        "rover_id": ROVER_ID,
+        "activity_type": "Health Check",
+        "description": "All components passed health check",
+        "location_x": LOCATION_X,
+        "location_y": LOCATION_Y,
+        "location_z": LOCATION_Z,
+        "battery_percentage": 0.0,
+        "cpu_usage_percentage": 0.0,
+        "memory_usage_percentage": 0.0,
+        "temperature": 0.0,
         "created_at": datetime.now().isoformat(),
-        "created_by": created_by
+        "created_by": 101
     }
 
     try:
@@ -207,36 +172,22 @@ def log_activity(
     except requests.exceptions.RequestException as e:
         print(f"❌ Failed to log activity | Error: {e}")
 
-def log_error(
-    activity_id,
-    activity_type,
-    created_by,
-    error_code,
-    rover_id,
-    error_message,
-    location_x,
-    location_y,
-    location_z,
-    battery_percentage,
-    cpu_usage_percentage,
-    memory_usage_percentage,
-    temperature,
-    created_at
-):
+def log_error():
+    message = "\n".join(error_messages)
     payload = {
-        "activity_id": activity_id,
-        "activity_type": activity_type,
-        "created_by": created_by,
-        "error_code": error_code,
-        "rover_id": rover_id,
-        "error_message": error_message,
-        "location_x": location_x,
-        "location_y": location_y,
-        "location_z": location_z,
-        "battery_percentage": battery_percentage,
-        "cpu_usage_percentage": cpu_usage_percentage,
-        "memory_usage_percentage": memory_usage_percentage,
-        "temperature": temperature,
+        "activity_id": "act-5647",
+        "activity_type": "Sensor Malfunction",
+        "created_by": 101,
+        "error_code": "E203",
+        "rover_id": ROVER_ID,
+        "error_message": message,
+        "location_x": LOCATION_X,
+        "location_y": LOCATION_Y,
+        "location_z": LOCATION_Z,
+        "battery_percentage": 0.0,
+        "cpu_usage_percentage": 0.0,
+        "memory_usage_percentage": 0.0,
+        "temperature": 0.0,
         "created_at": datetime.now().isoformat()
     }
 
@@ -253,11 +204,22 @@ def main():
         t.start()
         threads.append(t)
 
-    monitor_cameras()
-    monitor_voltage_sensor()
+    cam_thread = threading.Thread(target=monitor_cameras)
+    cam_thread.start()
+
+    voltage_thread = threading.Thread(target=monitor_voltage_sensor)
+    voltage_thread.start()
 
     for t in threads:
         t.join()
+    cam_thread.join()
+    voltage_thread.join()
+
+    if error_occurred:
+        log_error()
+    else:
+        log_activity()
+
     GPIO.cleanup()
 
 if __name__ == "__main__":
