@@ -163,7 +163,7 @@ def log_activity():
         "memory_usage_percentage": 0.0,
         "temperature": 0.0,
         "created_at": datetime.now().isoformat(),
-        "created_by": 101
+        "created_by": RPI_NO
     }
 
     try:
@@ -177,7 +177,7 @@ def log_error():
     payload = {
         "activity_id": "act-5647",
         "activity_type": "Sensor Malfunction",
-        "created_by": 101,
+        "created_by": RPI_NO,
         "error_code": "E203",
         "rover_id": ROVER_ID,
         "error_message": message,
